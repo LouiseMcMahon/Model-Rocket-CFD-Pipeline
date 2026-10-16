@@ -1,0 +1,25 @@
+# Quick smoke test: coarse mesh, a handful of cases (~10 minutes on 8 cores).
+# Generate the model first:  python examples/make_test_rocket.py models/test_rocket.stl
+model: ../models/test_rocket.stl
+name: test_rocket_quick
+
+geometry:
+  cg_from_nose: 0.36
+
+mesh:
+  preset: coarse
+
+solver:
+  iterations: 800
+  average_last: 150
+  nprocs: 8
+
+sweeps:
+  speed:
+    aoa: 0
+    speeds: [20, 50, 80]
+  aoa:
+    speed: 50
+    angles: [0, 3, 6]
+
+output_dir: ../runs

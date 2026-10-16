@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rocketcfd"
+version = "0.1.0"
+description = "Pipeline that runs model rocket geometry (STL/STEP) through OpenFOAM CFD"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "trimesh",
+    "manifold3d",
+    "pyyaml",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+step = ["gmsh"]
+dev = ["pytest", "gmsh"]
+
+[project.scripts]
+rocketcfd = "rocketcfd.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["rocketcfd*"]
