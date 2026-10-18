@@ -96,23 +96,46 @@ rocketcfd run examples\test_rocket_quick.yaml
 - Reference area = body tube cross-section; reference length = body diameter.
 - Axes: x along the rocket from the nose tip, y = pitch-up. Moments about the nose tip.
 - C_A / C_N are body-axis forces; C_D / C_L are wind-axis forces. At α = 0 they coincide.
-- X_cp = M_z / F_y, in metres and calibers from the nose tip. Stability margin = (X_cp − X_cg) / d.
+- **Centre of pressure from the nose tip.** Each case reports X_cp = M_z / F_y, but that is unreliable at
+  small angles and includes any force present at 0° (asymmetric fins, launch lugs). The report's
+  *Centre of pressure* section instead takes the slope of moment against normal force over the angle
+  sweep (|α| ≤ 6°), which cancels the 0° offset. It is given in mm, calibers and % of length, and is also
+  written to `centre_of_pressure.json`. It needs at least two angles in the sweep, and a normal force that
+  actually changes between them.
+- Stability margin = (X_cp − X_cg) / d, shown when `geometry.cg_from_nose` is set.
 
 ## Accuracy notes
 
 - Steady RANS with k-ω SST and wall functions (Spalding, valid at any y+), fully turbulent.
   Real model rockets often have laminar flow over the nose, so drag at low speed is somewhat high.
-- Incompressible: fine below Mach ~0.3, usable to ~0.5 with a warning, refused above 0.6.
+- Incompressible: fine below Mach ~0.3, usable to ~0.5 with a warning, refused above 0.6. Use the
+  `compressible` regime above that.
 - Always check mesh independence (re-run with `preset: fine` and compare C_D) before trusting
   absolute numbers. Trends between designs on the same mesh settings are more robust.
 - Check the `converged` and `cd_fluctuation` columns. Bluff-base wakes can oscillate in steady solvers.
 
-## Adding supersonic later
+## Flow regimes
 
-Flow regimes live in `rocketcfd/regimes/`. A regime supplies the fields, numerics and solver commands
-on top of the shared mesh, sweep and force machinery. `compressible.py` is the placeholder:
-implement `write_case`/`solve_commands` with `rhoSimpleFoam` (transonic) or `rhoCentralFoam`
-(supersonic), and add shock refinement to the mesh plan.
+Set `regime:` in the config. Both regimes share the geometry, mesh, sweeps and force post-processing.
+
+| regime | solver | use for |
+|---|---|---|
+| `incompressible` (default) | simpleFoam, k-ω SST | Mach < 0.3 (accepted up to 0.6 with a warning) |
+| `compressible` | rhoSimpleFoam, k-ω SST, perfect gas, Sutherland viscosity | Mach 0.3 to 1.5 |
+
+For `compressible`, the free stream comes from `air.pressure` (101325 Pa) and `air.temperature` (288.15 K);
+the Mach number in the report uses the speed of sound at that temperature. The wall is adiabatic.
+Warnings are written to the report for transonic (Mach 0.85-1) and supersonic (Mach >= 1) cases.
+
+- **Supersonic cases** use first-order upwind convection. Steady second-order schemes oscillate against
+  the bow shock and never converge. Shocks are therefore smeared over several cells.
+- **Not yet done:** meshing that refines around shocks, and a transient density-based solver
+  (rhoCentralFoam) for sharper supersonic shocks. Compressible cases are slower than incompressible ones.
+- Compressible and incompressible drag differ a little even at low Mach (different numerics), so compare
+  designs within one regime.
+
+Flow regimes live in `rocketcfd/regimes/`. A regime supplies the fields, numerics and solver commands on
+top of the shared machinery (see `base.py`).
 
 ## Layout
 

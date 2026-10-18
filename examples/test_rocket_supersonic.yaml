@@ -1,0 +1,20 @@
+# Supersonic check: Mach 1.2 only, to test the robust (first-order upwind) mode.
+model: ../models/test_rocket.stl
+name: test_rocket_supersonic
+regime: compressible
+
+mesh:
+  preset: coarse
+
+solver:
+  iterations: 1500
+  average_last: 200
+  nprocs: 8
+
+sweeps:
+  speed:
+    aoa: 0
+    speeds: [408]
+  aoa: null
+
+output_dir: ../runs

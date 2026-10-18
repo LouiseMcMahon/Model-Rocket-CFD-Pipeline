@@ -12,7 +12,8 @@ from typing import Any
 
 import yaml
 
-SPEED_OF_SOUND = 343.0  # m/s, sea level standard atmosphere
+GAMMA = 1.4
+R_AIR = 287.058  # J/(kg K)
 
 
 @dataclass
@@ -27,10 +28,25 @@ class GeometryConfig:
 
 @dataclass
 class AirConfig:
-    rho: float = 1.225             # kg/m^3
-    nu: float = 1.5e-5             # kinematic viscosity, m^2/s
+    rho: float = 1.225             # kg/m^3 (incompressible; the compressible regime uses p and T)
+    nu: float = 1.5e-5             # kinematic viscosity, m^2/s (incompressible; compressible uses Sutherland)
     turbulence_intensity: float = 0.005
     viscosity_ratio: float = 5.0   # nut/nu at the far field
+    pressure: float = 101325.0     # Pa, static free-stream (compressible regime)
+    temperature: float = 288.15    # K, static free-stream (compressible regime)
+
+    @property
+    def speed_of_sound(self) -> float:
+        return (GAMMA * R_AIR * self.temperature) ** 0.5
+
+    @property
+    def density_ideal_gas(self) -> float:
+        return self.pressure / (R_AIR * self.temperature)
+
+    @property
+    def mu_sutherland(self) -> float:
+        t = self.temperature
+        return 1.458e-6 * t**1.5 / (t + 110.4)
 
 
 MESH_PRESETS: dict[str, dict[str, float]] = {

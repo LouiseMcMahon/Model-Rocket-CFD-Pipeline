@@ -189,81 +189,9 @@ RAS
         write_text(case / "system" / "fvSchemes", self.fv_schemes())
         write_text(case / "system" / "fvSolution", self.fv_solution(cfg))
         write_text(case / "system" / "decomposeParDict", decompose_dict(cfg.solver.nprocs))
-        write_text(case / "system" / "controlDict", self._control_dict(cfg))
-
-    def _control_dict(self, cfg: Config) -> str:
-        n = cfg.solver.iterations
-        sample = ""
-        if cfg.visualize:
-            sample = """
-    slices
-    {
-        type            surfaces;
-        libs            (sampling);
-        writeControl    writeTime;
-        surfaceFormat   vtk;
-        formatOptions   { vtk { legacy true; format ascii; } }
-        fields          (p U);
-        interpolationScheme cellPoint;
-        surfaces
-        {
-            pitchPlane
-            {
-                type        cuttingPlane;
-                point       (0 0 1e-7);
-                normal      (0 0 1);
-                interpolate true;
-            }
-            rocketSurface
-            {
-                type        patch;
-                patches     (rocket);
-                interpolate true;
-            }
-        }
-    }
-"""
-        return header("controlDict") + f"""\
-application     {self.application};
-startFrom       startTime;
-startTime       0;
-stopAt          endTime;
-endTime         {n};
-deltaT          1;
-writeControl    timeStep;
-writeInterval   {n};
-purgeWrite      0;
-writeFormat     binary;
-writePrecision  10;
-timeFormat      general;
-timePrecision   6;
-runTimeModifiable true;
-
-functions
-{{
-    forces
-    {{
-        type            forces;
-        libs            (forces);
-        writeControl    timeStep;
-        writeInterval   1;
-        patches         (rocket);
-        rho             rhoInf;
-        rhoInf          {num(cfg.air.rho)};
-        CofR            (0 0 0);
-        log             false;
-    }}
-
-    residuals
-    {{
-        type            solverInfo;
-        libs            (utilityFunctionObjects);
-        fields          (U p k omega);
-        writeControl    timeStep;
-        writeInterval   1;
-    }}
-{sample}}}
-"""
+        write_text(case / "system" / "controlDict", self.control_dict(
+            cfg, f"        rho             rhoInf;\n        rhoInf          {num(cfg.air.rho)};",
+            "U p k omega"))
 
     def solve_commands(self, cfg: Config) -> list[tuple[str, str]]:
         n = cfg.solver.nprocs

@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-from .config import SPEED_OF_SOUND, Config  # noqa: E402
+from .config import Config  # noqa: E402
 from .geometry import RocketGeometry  # noqa: E402
 
 # -- reading OpenFOAM output -------------------------------------------------------------
@@ -124,7 +124,7 @@ def case_result(case: Path, geo: RocketGeometry, cfg: Config, regime, speed: flo
         "case": case.name,
         "speed_mps": speed,
         "aoa_deg": aoa,
-        "mach": speed / SPEED_OF_SOUND,
+        "mach": speed / cfg.air.speed_of_sound,
         "reynolds_L": speed * geo.length / cfg.air.nu,
         "CD": cd,
         "CL": cl,
@@ -159,6 +159,29 @@ def write_csv(results: list[dict], path: Path) -> None:
             w.writerow({k: (f"{v:.6g}" if isinstance(v, float) else v) for k, v in r.items()})
 
 
+def cp_from_sweep(results: list[dict], speed: float, geo: RocketGeometry, cfg: Config,
+                  max_aoa: float = 6.0) -> dict | None:
+    """Centre of pressure from the nose, from the slope of moment vs normal force over angle of attack.
+
+    Unlike the per-case X_cp = M/F, the slope cancels the force and moment present at zero angle
+    of attack (asymmetric fins, launch lugs, small mesh asymmetry), so it is the robust number
+    to use for stability. Needs at least two distinct angles |α| <= max_aoa at this speed.
+    """
+    pts = sorted({(r["aoa_deg"], r["CN"], r["Cm_nose"]) for r in results
+                  if r["speed_mps"] == speed and abs(r["aoa_deg"]) <= max_aoa})
+    if len({p[0] for p in pts}) < 2:
+        return None
+    _, cn, cm = np.array(pts).T
+    if np.ptp(cn) < 0.05:  # force barely changes with angle: slope would be noise
+        return None
+    xcp = float(np.polyfit(cn, cm, 1)[0]) * geo.ref_diameter
+    out = {"speed_mps": speed, "xcp_m": xcp, "xcp_cal": xcp / geo.ref_diameter,
+           "xcp_frac_length": xcp / geo.length}
+    if cfg.geometry.cg_from_nose is not None:
+        out["stability_cal"] = (xcp - cfg.geometry.cg_from_nose) / geo.ref_diameter
+    return out
+
+
 def cn_alpha(results: list[dict], speed: float, max_aoa: float = 6.0) -> float | None:
     """Normal-force slope per radian from a linear fit through the small-angle points."""
     pts = [(math.radians(r["aoa_deg"]), r["CN"]) for r in results
@@ -172,7 +195,7 @@ def cn_alpha(results: list[dict], speed: float, max_aoa: float = 6.0) -> float |
 # -- plots ---------------------------------------------------------------------------------
 
 
-def plot_speed_sweep(results: list[dict], aoa: float, out: Path) -> bool:
+def plot_speed_sweep(results: list[dict], aoa: float, cfg: Config, out: Path) -> bool:
     rs = sorted((r for r in results if r["aoa_deg"] == aoa), key=lambda r: r["speed_mps"])
     if len(rs) < 2:
         return False
@@ -187,7 +210,8 @@ def plot_speed_sweep(results: list[dict], aoa: float, out: Path) -> bool:
     ax.set_ylim(bottom=0)
     ax.grid(alpha=0.3)
     ax.legend()
-    sec = ax.secondary_xaxis("top", functions=(lambda x: x / SPEED_OF_SOUND, lambda m: m * SPEED_OF_SOUND))
+    a = cfg.air.speed_of_sound
+    sec = ax.secondary_xaxis("top", functions=(lambda x: x / a, lambda m: m * a))
     sec.set_xlabel("Mach")
     fig.tight_layout()
     fig.savefig(out, dpi=150)
@@ -212,7 +236,10 @@ def plot_aoa_sweep(results: list[dict], speed: float, geo: RocketGeometry, cfg: 
 
     xcp = [(x, r["Xcp_cal"]) for x, r in zip(a, rs) if not math.isnan(r["Xcp_cal"])]
     if xcp:
-        axes[1].plot(*zip(*xcp), "o-", color="#c0504d", lw=2, label="CP")
+        axes[1].plot(*zip(*xcp), "o-", color="#c0504d", lw=2, label="CP (per case)")
+    sweep_cp = cp_from_sweep(results, speed, geo, cfg)
+    if sweep_cp:
+        axes[1].axhline(sweep_cp["xcp_cal"], color="#c0504d", ls=":", label="CP (slope)")
     if cfg.geometry.cg_from_nose is not None:
         axes[1].axhline(cfg.geometry.cg_from_nose / geo.ref_diameter, color="k", ls="--", label="CG")
     axes[1].axhline(geo.length / geo.ref_diameter, color="grey", lw=0.8, label="tail")
@@ -226,7 +253,7 @@ def plot_aoa_sweep(results: list[dict], speed: float, geo: RocketGeometry, cfg: 
     for ax in axes:
         ax.set_xlabel("Angle of attack [deg]")
         ax.grid(alpha=0.3)
-    fig.suptitle(f"Angle-of-attack sweep at {speed:g} m/s (Mach {speed / SPEED_OF_SOUND:.2f})")
+    fig.suptitle(f"Angle-of-attack sweep at {speed:g} m/s (Mach {speed / cfg.air.speed_of_sound:.2f})")
     fig.tight_layout()
     fig.savefig(out, dpi=150)
     plt.close(fig)
@@ -323,12 +350,25 @@ def write_report(path: Path, cfg: Config, geo: RocketGeometry, mesh_stats: dict,
             slope = cn_alpha(results, cfg.sweeps.aoa.speed)
             if slope is not None:
                 lines += [f"C_Nα (α ≤ 6°, {cfg.sweeps.aoa.speed:g} m/s): **{slope:.3f} per radian**", ""]
+            cp = cp_from_sweep(results, cfg.sweeps.aoa.speed, geo, cfg)
+            if cp is not None:
+                lines += ["### Centre of pressure", "",
+                          f"- **{cp['xcp_m'] * 1000:.0f} mm from the nose tip** "
+                          f"({cp['xcp_cal']:.2f} calibers, {cp['xcp_frac_length']:.0%} of the length), "
+                          f"from the moment/force slope over the angle sweep at {cp['speed_mps']:g} m/s"]
+                if "stability_cal" in cp:
+                    lines.append(f"- Stability margin: **{cp['stability_cal']:.2f} calibers** with the CG at "
+                                 f"{cfg.geometry.cg_from_nose * 1000:.0f} mm (above 1 is the usual rule of thumb)")
+                lines.append("")
         for title, img in images.items():
             lines += [f"### {title}", "", f"![{title}]({img})", ""]
 
     lines += ["## Notes", "",
-              "- Steady RANS (k-ω SST, wall functions). Fully turbulent: no laminar run on the nose, "
-              "so drag at low Reynolds number is somewhat overestimated.",
+              "- Steady RANS (k-ω SST, wall functions), "
+              + ("compressible perfect gas (rhoSimpleFoam)." if cfg.regime == "compressible"
+                 else "incompressible (simpleFoam).")
+              + " Fully turbulent: no laminar run on the nose, so drag at low Reynolds number is "
+              "somewhat overestimated.",
               "- Coefficients are averaged over the last iterations; check `cd_fluctuation` and the "
               "`converged` column before trusting a number.",
               "- Run a finer mesh preset to check the numbers do not change much (mesh independence).",

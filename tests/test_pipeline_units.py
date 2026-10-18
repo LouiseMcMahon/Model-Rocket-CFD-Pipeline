@@ -145,6 +145,43 @@ def test_incompressible_rejects_high_mach(rocket_stl):
         get_regime("incompressible").check_conditions(cfg, 343)
 
 
+def test_compressible_mach_limits_and_warnings(rocket_stl):
+    cfg = config_for_model(rocket_stl)
+    reg = get_regime("compressible")
+    cfg.sweeps.speed.speeds = [100, 300, 408]
+    cfg.sweeps.aoa = None
+    warnings = reg.check_conditions(cfg, cfg.air.speed_of_sound)
+    assert len(warnings) == 2 and "transonic" in warnings[0] and "supersonic" in warnings[1]
+    cfg.sweeps.speed.speeds = [600]
+    with pytest.raises(ValueError, match="Mach"):
+        reg.check_conditions(cfg, cfg.air.speed_of_sound)
+
+
+def test_air_model():
+    from rocketcfd.config import AirConfig
+
+    air = AirConfig()
+    assert air.speed_of_sound == pytest.approx(340.3, abs=0.1)
+    assert air.density_ideal_gas == pytest.approx(1.225, abs=0.001)
+    assert air.mu_sutherland == pytest.approx(1.789e-5, rel=0.01)
+
+
+def test_compressible_case_files(tmp_path, rocket_stl):
+    cfg = config_for_model(rocket_stl)
+    cfg.solver.nprocs = 4
+    geo = prepare_geometry(rocket_stl, cfg.geometry)
+    reg = get_regime("compressible")
+    reg.write_case(tmp_path, geo, cfg, 420.0, 0.0)  # supersonic
+    assert "supersonic      true" in (tmp_path / "0" / "p").read_text()
+    assert "bounded Gauss upwind" in (tmp_path / "system" / "fvSchemes").read_text().split("div(phi,U)")[1][:40]
+    assert "limitTemperature" in (tmp_path / "system" / "fvOptions").read_text()
+    assert "rho             rho;" in (tmp_path / "system" / "controlDict").read_text()
+    reg.write_case(tmp_path, geo, cfg, 272.0, 0.0)  # transonic keeps second order
+    assert "linearUpwind" in (tmp_path / "system" / "fvSchemes").read_text().split("div(phi,U)")[1][:50]
+    cp = reg.pressure_coefficient(np.array([cfg.air.pressure]), 100.0, cfg)
+    assert cp[0] == pytest.approx(0.0)
+
+
 # -- post-processing ---------------------------------------------------------------------------
 
 
@@ -175,6 +212,22 @@ def test_case_result_coefficients(tmp_path, rocket_stl):
     assert r["CA_pressure"] + r["CA_viscous"] == pytest.approx(r["CA"])
     assert r["CN"] == pytest.approx(3.0 / qa)
     assert r["Xcp_m"] == pytest.approx(0.5)  # Mz / Fy
+
+
+def test_cp_from_sweep_cancels_zero_aoa_offset(rocket_stl):
+    cfg = config_for_model(rocket_stl)
+    geo = prepare_geometry(rocket_stl, cfg.geometry)
+    d = geo.ref_diameter
+    xcp_true = 0.40
+    # Linear normal force with a constant side-force offset (-0.07) that also carries a moment.
+    rows = []
+    for aoa in (0.0, 2.0, 4.0):
+        cn = 0.1 * aoa - 0.07
+        rows.append({"speed_mps": 50.0, "aoa_deg": aoa, "CN": cn,
+                     "Cm_nose": (xcp_true * 0.1 * aoa - 0.2 * 0.07) / d})
+    cp = post.cp_from_sweep(rows, 50.0, geo, cfg)
+    assert cp["xcp_m"] == pytest.approx(xcp_true, rel=1e-6)
+    assert post.cp_from_sweep(rows[:1], 50.0, geo, cfg) is None
 
 
 def test_read_vtk_polydata(tmp_path):

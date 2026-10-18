@@ -15,7 +15,7 @@ import time
 from pathlib import Path, PurePosixPath
 
 from . import post
-from .config import SPEED_OF_SOUND, Config
+from .config import Config
 from .geometry import RocketGeometry, plot_geometry, prepare_geometry
 from .mesh import mesh_commands, parse_check_mesh, plan_mesh, write_mesh_case
 from .regimes import get_regime
@@ -73,7 +73,7 @@ def _run(cfg: Config, out: Path, mesh_only: bool, force: bool) -> Path:
     # Geometry
     log.info("Preparing geometry from %s", cfg.model)
     geo = prepare_geometry(cfg.model, cfg.geometry)
-    warnings = list(geo.warnings) + regime.check_conditions(cfg, SPEED_OF_SOUND)
+    warnings = list(geo.warnings) + regime.check_conditions(cfg, cfg.air.speed_of_sound)
     plot_geometry(geo, out / "geometry.png")
     geo.mesh.export(out / "rocket_normalized.stl")
     s = geo.summary()
@@ -110,7 +110,7 @@ def _run(cfg: Config, out: Path, mesh_only: bool, force: bool) -> Path:
 
     # Sweep plots and report
     images: dict[str, str] = {}
-    if cfg.sweeps.speed and post.plot_speed_sweep(results, cfg.sweeps.speed.aoa, out / "drag_vs_speed.png"):
+    if cfg.sweeps.speed and post.plot_speed_sweep(results, cfg.sweeps.speed.aoa, cfg, out / "drag_vs_speed.png"):
         images["Drag vs speed"] = "drag_vs_speed.png"
     if cfg.sweeps.aoa and post.plot_aoa_sweep(results, cfg.sweeps.aoa.speed, geo, cfg, out / "aoa_sweep.png"):
         images["Angle-of-attack sweep"] = "aoa_sweep.png"
@@ -118,6 +118,11 @@ def _run(cfg: Config, out: Path, mesh_only: bool, force: bool) -> Path:
         img = out / "flow" / f"{r['case']}.png"
         if img.exists():
             images[f"Flow: {r['speed_mps']:g} m/s, α = {r['aoa_deg']:g}°"] = f"flow/{img.name}"
+    cp = post.cp_from_sweep(results, cfg.sweeps.aoa.speed, geo, cfg) if cfg.sweeps.aoa else None
+    if cp:
+        log.info("Centre of pressure: %.0f mm from the nose (%.2f cal)%s", cp["xcp_m"] * 1000, cp["xcp_cal"],
+                 f", stability {cp['stability_cal']:.2f} cal" if "stability_cal" in cp else "")
+        (out / "centre_of_pressure.json").write_text(json.dumps(cp, indent=2))
     post.write_report(out / "report.md", cfg, geo, mesh_stats, plan.summary(), results, warnings, str(root),
                       images)
     (out / "config_used.json").write_text(json.dumps(dataclasses.asdict(cfg), indent=2, default=str))
@@ -129,11 +134,14 @@ def _run_cases(cfg: Config, geo: RocketGeometry, regime, runner: Runner, root: P
                mesh_case: PurePosixPath, mesh_fp: str, out: Path, force: bool) -> list[dict]:
     conditions = cfg.sweeps.conditions()
     solver_settings = {k: v for k, v in dataclasses.asdict(cfg.solver).items() if k != "nprocs"}
+    air = dataclasses.asdict(cfg.air)
+    if regime.name == "incompressible":  # keep existing cases valid: p and T do not affect them
+        air = {k: air[k] for k in ("rho", "nu", "turbulence_intensity", "viscosity_ratio")}
     results = []
     for i, (speed, aoa) in enumerate(conditions, 1):
         name = case_name(speed, aoa)
         case = root / "cases" / name
-        fp = _fingerprint(mesh_fp, speed, aoa, dataclasses.asdict(cfg.air), solver_settings, cfg.visualize)
+        fp = _fingerprint(mesh_fp, speed, aoa, air, solver_settings, cfg.visualize)
         tag = f"[{i}/{len(conditions)}] {name} (V = {speed:g} m/s, AoA = {aoa:g} deg)"
         if not force and _is_done(runner, case, fp):
             log.info("%s: already done, reusing", tag)
