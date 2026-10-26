@@ -4,6 +4,7 @@
     rocketcfd inspect model.stl          normalise geometry, print sizes, save a preview
     rocketcfd init model.stl             write a starter YAML config next to the model
     rocketcfd run config.yaml            run the full pipeline (or pass a model file directly)
+    rocketcfd render config.yaml         3D presentation images of the solved cases
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ CONFIG_TEMPLATE = """\
 # rocketcfd configuration. Every setting except 'model' is optional.
 model: {model}
 # name: my_rocket            # output folder name (default: model file name)
-regime: incompressible       # subsonic, Mach < ~0.3. ('compressible' is planned)
+regime: incompressible       # incompressible (Mach < 0.3) | compressible (Mach 0.3-1.5)
 
 geometry:
   units: {units}                # m | cm | mm | in | auto (ignored for STEP: always metres)
@@ -50,6 +51,7 @@ sweeps:
     angles: [0, 2, 4, 6, 8, 10]
 
 visualize: true
+render_3d: true              # 3D presentation image per case (needs: pip install -e ".[render]")
 
 openfoam:
   runner: auto               # auto | wsl | native
@@ -126,6 +128,18 @@ def cmd_run(args) -> int:
     return 0
 
 
+def cmd_render(args) -> int:
+    from .pipeline import render_cases
+
+    cfg = _load(args.target, args)
+    written = render_cases(cfg, speed=args.speed, aoa=args.aoa)
+    if not written:
+        print("Nothing rendered: no solved case matches. Run the sweep first.", file=sys.stderr)
+        return 1
+    print(f"\n{len(written)} image(s) in {written[0].parent}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="rocketcfd", description="Model rocket CFD pipeline (OpenFOAM)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -153,6 +167,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--iterations", type=int)
     p.add_argument("-v", "--verbose", action="store_true")
     p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("render", help="3D presentation images of already-solved cases (needs PyVista)")
+    p.add_argument("target", help="config .yaml used for the run")
+    p.add_argument("--speed", type=float, help="only cases at this speed (m/s)")
+    p.add_argument("--aoa", type=float, help="only cases at this angle of attack (deg)")
+    p.set_defaults(func=cmd_render)
 
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")

@@ -5,6 +5,7 @@ Pass in a model rocket (STL or STEP) and get its aerodynamics from OpenFOAM:
 - **Drag vs speed**: C_D split into pressure (form + base) and skin-friction parts
 - **Angle-of-attack sweep**: normal force C_N, C_Nα, centre of pressure, and stability margin if you give a CG
 - **Flow pictures**: pressure coefficient and velocity on the pitch plane for each case
+- **3D renders** for presentations: the rocket coloured by surface pressure, with streamlines and the wake
 - A Markdown report, `results.csv`, and the full OpenFOAM cases for inspection in ParaView
 
 ```
@@ -29,25 +30,57 @@ forces → C_D, C_L, C_A, C_N, C_m, X_cp   +   plots, flow images, report.md
 
 ```powershell
 py -3.12 -m venv .venv
-.\.venv\Scripts\python -m pip install -e ".[step]"
+.\.venv\Scripts\python -m pip install -e ".[step,render]"
 .\.venv\Scripts\rocketcfd check
 ```
 
 `check` should print `OpenFOAM v2412 found via wsl runner`. (Use `py -3.12` rather than `python`:
 on this machine `python` on PATH is Inkscape's bundled interpreter.)
 
-## Usage
+## Quick start
+
+Run the example on a generated test rocket (coarse mesh, 6 cases, roughly 15 minutes on 8 cores):
 
 ```powershell
-# 1. Look at the model: prints length/diameter and writes <model>_preview.png
-rocketcfd inspect models\my_rocket.stl
-
-# 2. Write a config next to the model, then edit speeds, angles, CG, etc.
-rocketcfd init models\my_rocket.stl
-
-# 3. Run
-rocketcfd run models\my_rocket.yaml
+.\.venv\Scripts\python examples\make_test_rocket.py models\test_rocket.stl
+.\.venv\Scripts\rocketcfd run examples\example.yaml
 ```
+
+Then open `runs\example\report.md`. The commands below assume the venv is active
+(`.\.venv\Scripts\Activate.ps1`), so `rocketcfd` is on PATH.
+
+## Running your own rocket
+
+Put the model in `models\`. Git ignores everything in that folder, so your models and their run
+configs stay local.
+
+1. **Check the geometry.** `rocketcfd inspect models\my_rocket.stl` prints length and diameter and
+   writes `models\my_rocket_preview.png`. Make sure the scale is right and the nose is where you expect.
+2. **Write a config.** Either `rocketcfd init models\my_rocket.stl`, which writes `models\my_rocket.yaml`
+   with the main settings, or copy [`examples/example.yaml`](examples/example.yaml), which lists every
+   setting with a comment. Set the speeds, angles and CG you care about.
+3. **Check the mesh.** `rocketcfd run models\my_rocket.yaml --mesh-only` builds the mesh and writes
+   `runs\<name>\geometry.png` (the model as the solver sees it) and `mesh.json` (cell count and quality).
+4. **Run the sweep.** `rocketcfd run models\my_rocket.yaml`. Each case takes from a few minutes (coarse)
+   to around an hour (fine, with tail refinement), so start with `--preset coarse`.
+5. **Read the results** in `runs\<name>\report.md`.
+
+### The config file
+
+[`examples/example.yaml`](examples/example.yaml) is the reference: every setting, its default and what it
+does. The ones you will change most:
+
+| setting | what it does |
+|---|---|
+| `model` | STL or STEP file, relative to the config |
+| `geometry.nose_direction` | set it if `inspect` puts the nose at the wrong end (common with boat-tails and thin booms) |
+| `geometry.cg_from_nose` | CG in metres from the nose tip; adds the stability margin to the report |
+| `geometry.ref_diameter` | reference diameter in metres, if the auto-detected body diameter is not the one you want |
+| `mesh.preset` | `coarse` for a quick look, `medium` by default, `fine` to check mesh independence |
+| `mesh.upstream` / `downstream` / `lateral`, `mesh.tail_refinement` | domain size and extra refinement over the fins and base wake |
+| `solver.iterations`, `solver.average_last` | run length, and how much of the end is averaged into the results |
+| `sweeps.speed`, `sweeps.aoa` | the drag-vs-speed and angle-of-attack sweeps; `null` skips one |
+| `regime` | `incompressible` below Mach 0.3, `compressible` from 0.3 to 1.5 |
 
 Results land in `runs/<name>/`:
 
@@ -57,6 +90,7 @@ Results land in `runs/<name>/`:
 | `results.csv` | every coefficient for every case |
 | `drag_vs_speed.png`, `aoa_sweep.png` | sweep plots |
 | `flow/*.png` | C_p and velocity on the pitch plane |
+| `render/*.png` | 3D presentation image per case; the largest angle is also in the report |
 | `geometry.png`, `rocket_normalized.stl` | the model as the pipeline sees it, to check orientation and scale |
 | `pipeline.log` | full log |
 
@@ -64,18 +98,38 @@ The OpenFOAM cases live on the Linux side in `~/rocketcfd_runs/<name>/` (from Wi
 `\\wsl.localhost\Ubuntu\home\<you>\rocketcfd_runs`). Open a case in ParaView by creating an empty
 `case.foam` file in it.
 
+**Sleep:** on Windows the run asks the PC not to sleep until it finishes (a sleeping PC pauses WSL and
+the solver with it). Closing a laptop lid or choosing Sleep yourself still suspends it.
+
 **Resuming:** each finished mesh and case is fingerprinted. Re-running the same config skips anything
 already done, so you can stop with Ctrl+C, add speeds or angles, and run again. `--force` redoes everything.
+
+**Progress:** `runs\<name>\pipeline.log` shows each case as it starts and finishes.
 
 Handy flags: `--preset coarse` for a quick look, `--mesh-only` to check the mesh before committing
 to a sweep, `--nprocs`, `--iterations`, `-v`.
 
-Try it on the bundled test rocket:
+## 3D renders
+
+With the `render` extra installed (`pip install -e ".[render]"`, which adds PyVista), every case also gets
+a 3D image in `runs\<name>\render\`, made for slides and sharing:
+
+- the rocket coloured by surface pressure coefficient
+- a slice through the axis shaded by flow speed, which shows the wake behind the base
+- streamlines arriving at the angle of attack, and the recirculation just behind the base
+
+The report shows the largest angle of the angle-of-attack sweep. The camera and streamlines scale with the
+rocket, so any model is framed the same way: nose to the left, seen from slightly above.
+
+To redo the images of cases that are already solved, without running OpenFOAM again:
 
 ```powershell
-python examples\make_test_rocket.py models\test_rocket.stl
-rocketcfd run examples\test_rocket_quick.yaml
+rocketcfd render models\my_rocket.yaml            # every solved case
+rocketcfd render models\my_rocket.yaml --aoa 6    # one angle (--speed works the same way)
 ```
+
+Each image takes a few seconds. Without PyVista the run still works and just skips these images.
+Set `render_3d: false` in the config to turn them off.
 
 ## Preparing your model
 
@@ -144,11 +198,13 @@ rocketcfd/
   config.py        YAML config (dataclasses with defaults)
   geometry.py      load STL/STEP, clean, orient, measure
   mesh.py          blockMesh + snappyHexMesh dictionaries and sizing
-  regimes/         incompressible (simpleFoam); compressible placeholder
+  regimes/         incompressible (simpleFoam) and compressible (rhoSimpleFoam)
   runner.py        runs OpenFOAM natively or in WSL
   post.py          coefficients, plots, flow images, report
+  render3d.py      3D presentation renders (PyVista, optional)
   pipeline.py      orchestration and resume logic
   cli.py           rocketcfd command
-examples/          test rocket generator and a quick config
+examples/          example.yaml (every setting, commented) and a test rocket generator
+models/            your models and run configs (ignored by git)
 tests/             unit tests (no OpenFOAM needed): pytest
 ```

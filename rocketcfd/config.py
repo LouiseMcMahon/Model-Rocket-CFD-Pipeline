@@ -67,6 +67,7 @@ class MeshConfig:
     upstream: float = 1.5     # domain extents, in rocket lengths
     downstream: float = 4.0
     lateral: float = 1.0
+    tail_refinement: bool = False  # extra refinement box over the fins, base and near wake
 
     def resolved(self) -> dict[str, float]:
         if self.preset not in MESH_PRESETS:
@@ -134,6 +135,7 @@ class Config:
     solver: SolverConfig = field(default_factory=SolverConfig)
     sweeps: SweepConfig = field(default_factory=SweepConfig)
     visualize: bool = True
+    render_3d: bool = True         # 3D presentation image per case (needs the 'render' extra: PyVista)
     openfoam: OpenFOAMConfig = field(default_factory=OpenFOAMConfig)
     output_dir: Path = Path("runs")
 

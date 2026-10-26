@@ -66,6 +66,10 @@ def plan_mesh(geo: RocketGeometry, cfg: Config) -> MeshPlan:
         RefinementBox("tight", (-0.03 * L, -1.25 * R, -1.25 * R), (1.15 * L, 1.25 * R, 1.25 * R),
                       max(1, level - 2)),
     ]
+    if cfg.mesh.tail_refinement:
+        # Fins, base and the first few diameters of the base wake.
+        boxes.append(RefinementBox("tail", (0.75 * L, -1.15 * R, -1.15 * R), (L + 3 * d, 1.15 * R, 1.15 * R),
+                                   max(1, level - 1)))
     # Fluid seed point: upstream, off-axis, and not on a cell face.
     seed = (x0 + 0.37 * h0 + 0.5 * cfg.mesh.upstream * L, 0.413 * lateral + 0.0123 * h0,
             0.287 * lateral + 0.0171 * h0)

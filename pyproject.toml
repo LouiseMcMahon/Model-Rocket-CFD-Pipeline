@@ -18,7 +18,8 @@ dependencies = [
 
 [project.optional-dependencies]
 step = ["gmsh"]
-dev = ["pytest", "gmsh"]
+render = ["pyvista"]
+dev = ["pytest", "gmsh", "pyvista"]
 
 [project.scripts]
 rocketcfd = "rocketcfd.cli:main"

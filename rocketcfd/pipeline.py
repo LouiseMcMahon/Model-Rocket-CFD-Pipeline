@@ -6,15 +6,17 @@ skipped on the next run if nothing that affects them has changed.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
 import logging
 import math
+import sys
 import time
 from pathlib import Path, PurePosixPath
 
-from . import post
+from . import post, render3d
 from .config import Config
 from .geometry import RocketGeometry, plot_geometry, prepare_geometry
 from .mesh import mesh_commands, parse_check_mesh, plan_mesh, write_mesh_case
@@ -53,12 +55,36 @@ def _setup_logging(out: Path, verbose: bool) -> logging.Handler:
     return fh
 
 
+@contextlib.contextmanager
+def _keep_awake():
+    """Stop Windows from sleeping while a run is in progress (a sleeping PC also pauses WSL).
+
+    The request belongs to this process and ends when the run finishes or the process exits;
+    it does not change any power settings. Display sleep and closing the lid still apply.
+    """
+    if sys.platform != "win32":
+        yield
+        return
+    import ctypes
+    es_continuous, es_system_required = 0x80000000, 0x00000001
+    kernel32 = ctypes.windll.kernel32
+    if kernel32.SetThreadExecutionState(es_continuous | es_system_required):
+        log.info("Keeping the PC awake until the run finishes")
+    else:
+        log.warning("Could not stop the PC from sleeping; a sleep will pause the run")
+    try:
+        yield
+    finally:
+        kernel32.SetThreadExecutionState(es_continuous)
+
+
 def run_pipeline(cfg: Config, mesh_only: bool = False, force: bool = False, verbose: bool = False) -> Path:
     out = cfg.output_dir / cfg.name
     (out / "flow").mkdir(parents=True, exist_ok=True)
     handler = _setup_logging(out, verbose)
     try:
-        return _run(cfg, out, mesh_only, force)
+        with _keep_awake():
+            return _run(cfg, out, mesh_only, force)
     finally:
         logging.getLogger("rocketcfd").removeHandler(handler)
         handler.close()
@@ -114,6 +140,9 @@ def _run(cfg: Config, out: Path, mesh_only: bool, force: bool) -> Path:
         images["Drag vs speed"] = "drag_vs_speed.png"
     if cfg.sweeps.aoa and post.plot_aoa_sweep(results, cfg.sweeps.aoa.speed, geo, cfg, out / "aoa_sweep.png"):
         images["Angle-of-attack sweep"] = "aoa_sweep.png"
+    hero = _hero_case(results, cfg)
+    if hero and (out / "render" / f"{hero['case']}.png").exists():
+        images[f"3D view: {hero['speed_mps']:g} m/s, α = {hero['aoa_deg']:g}°"] = f"render/{hero['case']}.png"
     for r in results:
         img = out / "flow" / f"{r['case']}.png"
         if img.exists():
@@ -164,5 +193,59 @@ def _run_cases(cfg: Config, geo: RocketGeometry, regime, runner: Runner, root: P
                  "" if r["converged"] else f" (not converged, CD swing {r['cd_fluctuation']:.1%})")
         if cfg.visualize:
             post.render_flow(local, geo, cfg, regime, speed, aoa, out / "flow" / f"{name}.png")
+        if cfg.render_3d:
+            _render_3d(local, geo, cfg, regime, speed, aoa, out / "render" / f"{name}.png")
         post.write_csv(results, out / "results.csv")
     return results
+
+
+_warned_no_pyvista = False
+
+
+def _render_3d(case: Path, geo: RocketGeometry, cfg: Config, regime, speed: float, aoa: float,
+               png: Path) -> bool:
+    """3D presentation image of one case. Never fails the run: a bad render is only logged."""
+    global _warned_no_pyvista
+    if not render3d.available():
+        if not _warned_no_pyvista:
+            log.info("Skipping 3D renders: PyVista is not installed (pip install -e \".[render]\")")
+            _warned_no_pyvista = True
+        return False
+    try:
+        return render3d.render_case(case, geo, cfg, regime, speed, aoa, png)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("3D render of %s failed: %s", case.name, exc)
+        return False
+
+
+def _hero_case(results: list[dict], cfg: Config) -> dict | None:
+    """The case shown as the report's 3D view: the largest angle of the AoA sweep, else the first case."""
+    if cfg.sweeps.aoa:
+        sweep = [r for r in results if r["speed_mps"] == cfg.sweeps.aoa.speed]
+        if sweep:
+            return max(sweep, key=lambda r: abs(r["aoa_deg"]))
+    return results[0] if results else None
+
+
+def render_cases(cfg: Config, speed: float | None = None, aoa: float | None = None) -> list[Path]:
+    """Re-render the 3D images of already-solved cases, without meshing or solving anything."""
+    if not render3d.available():
+        raise RuntimeError("3D rendering needs PyVista: pip install -e \".[render]\"")
+    out = cfg.output_dir / cfg.name
+    regime = get_regime(cfg.regime)
+    runner = Runner(cfg.openfoam)
+    geo = prepare_geometry(cfg.model, cfg.geometry)
+    written = []
+    for v, a in cfg.sweeps.conditions():
+        if (speed is not None and v != speed) or (aoa is not None and a != aoa):
+            continue
+        name = case_name(v, a)
+        case = runner.local(runner.work_dir / cfg.name / "cases" / name)
+        if not (case / DONE_FILE).exists():
+            log.info("%s: not solved yet, skipping", name)
+            continue
+        png = out / "render" / f"{name}.png"
+        if _render_3d(case, geo, cfg, regime, v, a, png):
+            log.info("%s: wrote %s", name, png)
+            written.append(png)
+    return written

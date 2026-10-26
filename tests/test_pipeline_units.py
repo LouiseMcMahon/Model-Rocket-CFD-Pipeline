@@ -240,3 +240,30 @@ def test_read_vtk_polydata(tmp_path):
     assert pts.shape == (4, 3)
     assert [list(p) for p in polys] == [[0, 1, 2, 3]]
     assert list(fields["p"]) == [1, 2, 3, 4] and fields["U"].shape == (4, 3)
+
+
+# -- 3D render helpers ---------------------------------------------------------------------------
+
+
+def test_autocrop_trims_background_rows():
+    from rocketcfd.render3d import BACKGROUND, autocrop
+
+    bg = [int(BACKGROUND[i:i + 2], 16) for i in (1, 3, 5)]
+    img = np.tile(np.array(bg, dtype=np.uint8), (300, 200, 1))
+    img[120:150, 50:60] = 255
+    out = autocrop(img, pad=10)
+    assert out.shape[0] == 30 + 2 * 10
+    assert autocrop(np.tile(np.array(bg, dtype=np.uint8), (5, 5, 1))).shape == (5, 5, 3)
+
+
+def test_hero_case_is_largest_sweep_angle(rocket_stl):
+    from rocketcfd.pipeline import _hero_case
+
+    cfg = config_for_model(rocket_stl)
+    cfg.sweeps.aoa.speed = 40
+    results = [{"case": c, "speed_mps": v, "aoa_deg": a}
+               for c, v, a in (("a", 40, 0), ("b", 40, -8), ("c", 40, 6), ("d", 60, 10))]
+    assert _hero_case(results, cfg)["case"] == "b"
+    cfg.sweeps.aoa = None
+    assert _hero_case(results, cfg)["case"] == "a"
+    assert _hero_case([], cfg) is None

@@ -6,6 +6,7 @@ build/
 
 # pipeline outputs
 runs/
-models/*_normalized.stl
-models/*_preview.png
-models/test_rocket*.stl
+
+# your models and their run configs stay local; see examples/example.yaml
+models/*
+!models/.gitkeep

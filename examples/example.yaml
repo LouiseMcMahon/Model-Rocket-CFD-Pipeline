@@ -1,0 +1,62 @@
+# Example rocketcfd run config. Copy it next to your model (in models/, which git ignores),
+# change 'model', and edit what you need. Every setting except 'model' is optional; the values
+# shown are the defaults unless the comment says otherwise.
+#
+# As written it runs the generated test rocket on a coarse mesh (6 cases, roughly 15 min on 8 cores):
+#   python examples/make_test_rocket.py models/test_rocket.stl
+#   rocketcfd run examples/example.yaml
+#
+# Relative paths ('model', 'output_dir') are relative to this file.
+
+model: ../models/test_rocket.stl    # STL or STEP
+name: example                       # output folder name; default is the model file name
+regime: incompressible              # incompressible (simpleFoam, Mach < 0.3) | compressible (rhoSimpleFoam, Mach 0.3-1.5)
+
+geometry:
+  units: auto              # m | cm | mm | in | auto (guessed from size). STEP is always read in metres
+  nose_direction: auto     # auto | +x | -x | +y | -y | +z | -z: the way the nose points in the file.
+                           # auto takes the slimmer end as the nose; set it when that is wrong
+                           # (boat-tails and thin booms), and check runs/<name>/geometry.png
+  roll_deg: 0              # roll about the axis; with 4 fins, 0 = "+" layout, 45 = "x" layout
+  # ref_diameter: 0.0416   # metres; reference area = pi d^2 / 4. Auto-detected from the body tube
+  cg_from_nose: 0.36       # metres (not set by default); adds the stability margin to the report
+
+air:
+  rho: 1.225               # kg/m^3 (incompressible)
+  nu: 1.5e-5               # m^2/s (incompressible)
+  # pressure: 101325       # Pa   (compressible free stream)
+  # temperature: 288.15    # K    (compressible free stream)
+
+mesh:
+  preset: coarse           # coarse (quick look) | medium (default) | fine (mesh independence check)
+  # cells_per_diameter: 24 # override the preset's surface resolution; raise it for thin fins
+  # layers: 3              # boundary layers; 0 disables
+  upstream: 1.5            # domain size in rocket lengths: ahead of the nose,
+  downstream: 4.0          #   behind the base,
+  lateral: 1.0             #   and to each side
+  tail_refinement: false   # extra refinement over the fins, base and near wake
+
+solver:
+  iterations: 800          # default 1500
+  average_last: 150        # iterations averaged for the reported coefficients (default 300).
+                           # Make it larger if a blunt base makes the forces oscillate
+  nprocs: 8                # MPI processes; about half your logical cores
+
+sweeps:
+  speed:                   # drag vs speed, at a fixed angle of attack. 'speed: null' skips it
+    aoa: 0
+    speeds: [20, 50, 80]   # m/s
+  aoa:                     # stability sweep at a fixed speed. 'aoa: null' skips it
+    speed: 50
+    angles: [-3, 0, 3, 6]  # degrees; a negative angle checks the results are symmetric
+
+visualize: true            # 2D C_p and velocity images on the pitch plane (flow/)
+render_3d: true            # 3D presentation image per case (render/); needs the 'render' extra
+
+openfoam:
+  runner: auto             # auto | wsl | native
+  wsl_distro: Ubuntu
+  bashrc: /usr/lib/openfoam/openfoam2412/etc/bashrc
+  work_dir: ~/rocketcfd_runs   # Linux-side folder for the OpenFOAM cases
+
+output_dir: ../runs
