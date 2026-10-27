@@ -45,7 +45,7 @@ def render_case(case: Path, geo: RocketGeometry, cfg: Config, regime, speed: flo
     cp_lim = float(np.clip(np.ceil(np.percentile(np.abs(wall["Cp"]), 95) * 10) / 10, 0.2, 1.0))
 
     # Work in a box around the rocket: much faster streamlines and slices.
-    box = internal.clip_box((-0.33 * L, 1.7 * L, -3 * R, 3 * R, -3 * R, 3 * R), invert=False)
+    box = _crop_cells(internal, (-0.33 * L, -3 * R, -3 * R), (1.7 * L, 3 * R, 3 * R))
     box = box.cell_data_to_point_data()
     box["Umag"] = np.linalg.norm(box["U"], axis=1) / speed
 
@@ -105,6 +105,18 @@ def _read_case(pv, case: Path):
         log.warning("No 'rocket' patch in %s; nothing to render", case)
         return None
     return data["internalMesh"], boundary["rocket"]
+
+
+def _crop_cells(mesh, lo, hi):
+    """Whole cells whose centres lie in the box, split into tetrahedra.
+
+    Clipping cuts snappyHexMesh's polyhedral cells (at refinement-level changes) badly in VTK 9.5,
+    leaving holes in slices and a mesh streamlines cannot find points in. Keeping cells whole and
+    then tetrahedralising avoids both, and the ragged box edge is outside the framed view.
+    """
+    c = mesh.cell_centers().points
+    inside = np.all((c >= np.asarray(lo)) & (c <= np.asarray(hi)), axis=1)
+    return mesh.extract_cells(np.flatnonzero(inside)).triangulate()
 
 
 def autocrop(img: np.ndarray, pad: int = 40) -> np.ndarray:
